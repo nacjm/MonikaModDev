@@ -96,7 +96,7 @@ init -45 python:
             )
 
 
-        def createPackageSlip(self, package):
+        def createPackageSlip(self, package, bs=None):
             """
             Generates a checksum for a package (which is a file descriptor)
 
@@ -107,12 +107,14 @@ init -45 python:
             IN:
                 package - file descriptor of the package we want
                     NOTE: is seek(0)'d after reading
+                bs - blocksize to use. IF None, the default blocksize is ued
+                    (Default: None)
 
             RETURNS:
-                sha256 checksum (hexadec) of the given package, or empty string
+                sha256 checksum (hexadec) of the given package, or None
                 if error occured
             """
-            pkg_slip = self._unpack(package, None, False, True)
+            pkg_slip = self._unpack(package, None, False, True, bs)
 
             # reset the package when done
             package.seek(0)
@@ -257,7 +259,8 @@ init -45 python:
         def signForPackage(self, 
                 package_name,
                 pkg_slip,
-                keep_contents=False
+                keep_contents=False,
+                bs=None
             ):
             """
             Gets a package, checks if all the contents are there, and then
@@ -273,6 +276,9 @@ init -45 python:
                 keep_contents - if True, then we copy the data into a StringIO
                     buffer and return it.
                     (Defualt: False)
+                bs - blocksize to use when reading the package
+                    IF None, the default blocksize is used
+                    (Default: None)
 
             RETURNS:
                 if the package matches signature:
@@ -296,7 +302,13 @@ init -45 python:
 
                 # we always want a package slip in this case
                 # we only want to unpack if we are keeping contents
-                _pkg_slip = self._unpack(package, contents, keep_contents, True)
+                _pkg_slip = self._unpack(
+                    package,
+                    contents,
+                    keep_contents,
+                    True,
+                    bs
+                )
 
                 ### check sigs
                 if _pkg_slip != pkg_slip:
@@ -423,7 +435,7 @@ init -45 python:
             return os.path.normcase(self.station + package_name)
 
 
-        def _pack(self, contents, box, pack=True, pkg_slip=True):
+        def _pack(self, contents, box, pack=True, pkg_slip=True, bs=None):
             """
             Runs the packing algorithm for given file descriptors
             Supports:
@@ -449,6 +461,8 @@ init -45 python:
                     NOTE: if pack is True, this is done using data AFTER
                         encoding
                     (Default: True)
+                bs - blocksize to use. If None, we use READ_SIZE
+                    (Default: None)
 
             RETURNS:
                 generated sha256 checksum if pkg_slip is True
@@ -457,7 +471,10 @@ init -45 python:
             if not (pkg_slip or pack):
                 return None
 
-            _contents = MASDockingStation._blockiter(contents, self.READ_SIZE)
+            if bs is None:
+                bs = self.READ_SIZE
+
+            _contents = MASDockingStation._blockiter(contents, bs)
 
             if pkg_slip and pack:
                 # encode the data, then checksum the base64, then write to 
@@ -488,7 +505,7 @@ init -45 python:
             return None
 
 
-        def _unpack(self, box, contents, unpack=True, pkg_slip=True):
+        def _unpack(self, box, contents, unpack=True, pkg_slip=True, bs=None):
             """
             Runs the unpacking algorithm for given file descriptors
             Supports:
@@ -513,6 +530,8 @@ init -45 python:
                     NOTE: if unpack is True, this is done using data BEFORE
                         decoding
                     (Default: True)
+                bs - blocksize to use. If None, use B64_READ_SIZE
+                    (Default: None)
 
             RETURNS:
                 generated sha256 checksum if pkg_slip is True
@@ -521,7 +540,10 @@ init -45 python:
             if not (pkg_slip or unpack):
                 return None
 
-            _box = MASDockingStation._blockiter(box, self.B64_READ_SIZE)
+            if bs is None:
+                bs = self.B64.READ_SIZE
+
+            _box = MASDockingStation._blockiter(box, bs)
 
             if pkg_slip and unpack:
                 # checksum data, decode it, write to output
@@ -612,21 +634,234 @@ init -45 python:
     mas_docking_station = MASDockingStation()
 
 
-init -25 python in mas_docking_station:
+default persistent._mas_moni_chksum = None
+
+# this value should be in bytes
+# NOTE: do NOT set this directly. Use the helper functions
+default persistent._mas_dockstat_moni_size = 0
+
+init python in mas_dockstat:
+    import store
+
+    def setMoniSize(tdelta):
+        """
+        Sets the appropriate persistent size for monika
+
+        IN:
+            tdelta - timedelta to use
+        """
+        # get hours
+        days = tdelta.days
+        secs = tdelta.seconds
+        hours = (days * 24) + (secs / 3600.0)
+
+        # our rates
+        first100 = 0.54
+        post100 = 0.06
+
+        # megabytes
+        mbs = 0
+
+        if hours > 100:
+            mbs = 100 * first100
+            hours -= 100
+            mbs += hours * post100
+
+        else:
+            mbs = hours * first100
+
+        # now we can set the final size (in MiB)
+        store.persistent._mas_dockstat_moni_size = int(mbs * (1024**2))
+
+
+
+init 200 python in mas_dockstat:
     # special store 
     # lets use this store to handle generation of docking station files
+    import store
     import store.mas_utils as mas_utils
-
-#    if persistent._mas_monika_file_seed is None:
-#        persistent._mas_monika_file_checksum = None
-
-#    if persistent._mas_monika_file_checksum is None:
-#        persistent._mas_monika_file_seed = None
+    from cStringIO import StringIO as fastIO
+    import os
 
 
+    def generateMonika(dockstat):
+        """
+        Generates / writes a monika blob file.
 
-#    def generateMonika():
-#        """
-#        Generates a Monika StringIO file
-#        """
+        NOTE: This does both generation and integretiy checking
+        NOTE: exceptions are logged
+
+        IN:
+            dockstat - the docking station to generate Monika in
+
+        RETURNS:
+            checksum of monika
+            -1 if checksums didnt match (and we cant verify data integrity of
+                the generated moinika file)
+            None otherwise
+        """
+        ### functions we need
+        def trydel(f_path):
+            try:
+                os.remove(f_path)
+            except:
+                pass
+
+        ### other stuff we need
+        # inital buffer
+        moni_buffer = fastIO()
+
+        ### metadata elements
+        END_DELIM = "|||"
+        num_5 = "{:05d}"
+        num_2 = "{:02d}"
+        num_f = "{:6f}"
+        first_sesh = ""
+        affection_val = ""
+       
+        # metadata parsing
+        if store.persistent.sessions is not None:
+            first_sesh_dt = store.persistent.sessions.get("first_session",None)
+
+            if first_sesh_dt is not None:
+                first_sesh = "".join([
+                    num_5.format(first_sesh_dt.year),
+                    num_2.format(first_sesh_dt.month),
+                    num_2.format(first_sesh_dt.day)
+                ])
+
+        if store.persistent._mas_affection is not None:
+            _affection = store.persistent._mas_affection.get("affection", None)
+            
+            if _affection is not None:
+                affection_val = num_f.format(_affection)
+
+        # build metadata list
+        moni_buffer.write("|".join([
+            first_sesh,
+            store.persistent.playername,
+            store.persistent._mas_monika_nickname,
+            affection_val,
+            store.monika_chr.hair,
+            store.monika_chr.clothes,
+            END_DELIM
+        ]))
+
+        ### monikachr
+        moni_chr = None
+        try:
+            moni_chr = open(os.path.normcase(
+                renpy.config.basedir + "/game/mod_assets/monika/mbase"
+            ), "rb")
+
+            # NOTE: moin_chr is going to be less than 200KB, this be fine
+            moni_buffer.write(moni_chr.read())
+
+        except Exception as e:
+            mas_utils.writelog("[ERROR] mbase copy failed | {0}".format(
+                str(e)
+            ))
+            moni_buffer.close()
+            return None
+            
+        finally:
+            # always close moni_chr
+            if moni_chr is not None:
+                moni_chr.close()
+
+        ### now we must do the streamlined write system to file
+        moni_path = dockstat._trackPackage("monika")
+        blocksize = 4 * (1024**2)
+        moni_fbuffer = None
+        moni_sum = None
+        try:
+            # first, lets open up the moni file buffer
+            moni_fbuffer = open(moni_path, "wb")
+
+            # now open up the checklist and encoders
+            checklist = dockstat.hashlib.sha256()
+            encoder = dockstat.base64.b64encode
+
+            # and write out the metadata / monika
+            # NOTE: we can do this because its under our 4MB block size
+            data = encoder(moni_buffer.getvalue())
+            checklist.update(data)
+            moni_fbuffer.write(data)
+
+            # and now for the random data generation
+            # NOTE: this should represent number of bytes
+            moni_size = store.persistent._mas_dockstat_moni_size
+            moni_size_limit = moni_size - blocksize
+            curr_size = 0
+
+            while curr_size < moni_size_limit:
+                data = encoder(os.urandom(blocksize))
+                checklist.update(data)
+                moni_fbuffer.write(data)
+                curr_size += blocksize
+
+            # we should have some leftovers
+            leftovers = moni_size - curr_size
+            if leftovers > 0:
+                data = encoder(os.urandom(leftovers))
+                checklist.update(data)
+                moni_fbuffer.write(data)
+
+            # great! lets go ahead and save the digest
+            moni_sum = checklist.hexdigest()
+
+        except Exception as e:
+            mas_utils.writelog("[ERROR] monibuffer write failed | {0}".format(
+                str(e)
+            ))
+
+            # attempt to delete existing file if its there
+            # NOTE: dont care if it fails, we just want to try it 
+            try:
+                # NOTE: we do buffer closing here because we need to try
+                # file deletion in here too
+                if moni_fbuffer is not None:
+                    moni_fbuffer.close()
+
+                moni_fbuffer = None
+                os.remove(moni_path)
+            except:
+                pass
+
+            return None
+
+        finally:
+            # always close the fbuffer
+            if moni_fbuffer is not None:
+                moni_fbuffer.close()
+
+            # we dont need this buffer after here
+            moni_buffer.close()
+
+        ### Now to verify that we output the file correctly
+        moni_pkg = dockstat.getPackage("monika")
+        if moni_pkg is None:
+            # ALERT ALERT HOW DID WE FAIL
+            mas_utils.writelog("[ERROR] monika not found.")
+            trydel(moni_path)
+            return None
+
+        # we should have a file descriptor, lets attempt a pkg slip
+        moni_slip = dockstat.createPackageSlip(moni_pkg, blocksize)
+        if moni_slip is None:
+            # ALERT ALERT WE FAILED AGAIN
+            mas_utils.writelog("[ERROR] monika could not be validated.")
+            trydel(moni_path)
+            return None
+
+        if moni_slip != moni_sum:
+            # WOW SRS THIS IS BAD
+            mas_utils.writelog(
+                "[ERROR] monisums didn't match, did we have write failure?"
+            )
+            trydel(moni_path)
+            return -1
+
+        # otherwise, we managed to create a monika! Congrats!
+        return moni_sum
 
