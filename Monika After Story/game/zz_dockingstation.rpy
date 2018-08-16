@@ -112,11 +112,7 @@ init -45 python:
                 sha256 checksum (hexadec) of the given package, or empty string
                 if error occured
             """
-            _package = MASDockingStation._blockiter(
-                package, self.B64_READ_SIZE
-            )
-
-            pkg_slip = self._unpack(_package, None, False, True)
+            pkg_slip = self._unpack(package, None, False, True)
 
             # reset the package when done
             package.seek(0)
@@ -185,12 +181,9 @@ init -45 python:
             """
             box = None
             try:
-                _contents = MASDockingStation._blockiter(
-                    contents, self.READ_SIZE
-                )
                 box = self.fastIO()
 
-                return (box, self._pack(_contents, box, True, pkg_slip))
+                return (box, self._pack(contents, box, True, pkg_slip))
 
             except Exception as e:
                 # if an error occured, close the box buffer and raise
@@ -362,14 +355,11 @@ init -45 python:
             """
             contents = None
             try:
-                _package = MASDockingStation._blockiter(
-                    package, self.B64_READ_SIZE
-                )
                 # NOTE: we use regular StringIO in case of unicode
                 contents = self.slowIO()
 
                 _pkg_slip = self._unpack(
-                    _package,
+                    package,
                     contents,
                     True,
                     pkg_slip is not None
@@ -634,8 +624,6 @@ init -25 python in mas_docking_station:
 #        persistent._mas_monika_file_seed = None
 
 
-    MONIKA_SIZE_MIN = 10 * (10^9)
-    MONIKA_SIZE_MAX = 30 * (10^9)
 
 #    def generateMonika():
 #        """
