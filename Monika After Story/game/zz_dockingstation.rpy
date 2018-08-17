@@ -643,6 +643,9 @@ default persistent._mas_dockstat_moni_size = 0
 init python in mas_dockstat:
     import store
 
+    # blocksize is relatively constant
+    blocksize = 4 * (1024**2)
+
     def setMoniSize(tdelta):
         """
         Sets the appropriate persistent size for monika
@@ -683,7 +686,6 @@ init 200 python in mas_dockstat:
     from cStringIO import StringIO as fastIO
     import os
 
-
     def generateMonika(dockstat):
         """
         Generates / writes a monika blob file.
@@ -699,6 +701,9 @@ init 200 python in mas_dockstat:
             -1 if checksums didnt match (and we cant verify data integrity of
                 the generated moinika file)
             None otherwise
+
+        ASSUMES:
+            blocksize - this is a constant in this store
         """
         ### functions we need
         def trydel(f_path):
@@ -771,7 +776,6 @@ init 200 python in mas_dockstat:
 
         ### now we must do the streamlined write system to file
         moni_path = dockstat._trackPackage("monika")
-        blocksize = 4 * (1024**2)
         moni_fbuffer = None
         moni_sum = None
         try:
@@ -865,3 +869,5 @@ init 200 python in mas_dockstat:
         # otherwise, we managed to create a monika! Congrats!
         return moni_sum
 
+
+##
