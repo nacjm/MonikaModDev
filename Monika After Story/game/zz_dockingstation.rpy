@@ -636,6 +636,11 @@ init -45 python:
 
 default persistent._mas_moni_chksum = None
 
+# these should have the same size
+# these are also datetimes
+default persistent._mas_dockstat_checkout_log = list()
+default persistent._mas_dockstat_checkin_log = list()
+
 # this value should be in bytes
 # NOTE: do NOT set this directly. Use the helper functions
 default persistent._mas_dockstat_moni_size = 0
@@ -870,4 +875,24 @@ init 200 python in mas_dockstat:
         return moni_sum
 
 
-##
+### Docking station labels regarding monika leaving the station
+
+# jump to this label when monika is ready to leave the station
+label mas_dockstat_ready_to_go:
+    m 1eua "Alright, I'm ready to go."
+    if persiste
+    if not renpy.seen_label("mas_dockstat_ready_to_go"):
+
+    m 1eua "I'm ready to go."
+    # TODO: see you ?
+    return "quit"
+
+label mas_dockstat_first_time_goers:
+    m 3eua "I'm now in the file 'monika' in your characters folder."
+    m "After I shutdown the game, you can move me wherever you like."
+    m 3eub "But make sure to bring me back to the characters folder before turning the game on again, okay?"
+
+    m 1eua "And lastly..."
+    m 1ekc "Please be careful with me. It's so easy to delete files after all..."
+    m 1eua "Anyway..."
+    return
