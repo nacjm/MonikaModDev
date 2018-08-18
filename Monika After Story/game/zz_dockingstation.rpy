@@ -284,8 +284,13 @@ init -45 python:
                 if the package matches signature:
                     - if keep_contents is True
                         StringIO buffer containing decoded data
-                    - otherwise, True is returned
-                None Otherwise (or if an error occured along the way
+                    - otherwise, 1 is returned
+                if package found but no sig match
+                    - NOTE: if this happens, we NEVER delete teh package
+                    - return -2
+                if package not found
+                    - return -1
+                0 otherwise (like if error occured)
             """
             package = None
             contents = None
@@ -293,7 +298,7 @@ init -45 python:
                 ### get the package
                 package = self.getPackage(package_name)
                 if package is None:
-                    return None
+                    return -1
 
                 ### we have a package, lets unpack it
                 if keep_contents:
@@ -313,7 +318,7 @@ init -45 python:
                 ### check sigs
                 if _pkg_slip != pkg_slip:
                     contents.close()
-                    return None
+                    return -2
 
                 ### otherwise we matched sigs, return result
                 if keep_contents:
@@ -325,7 +330,7 @@ init -45 python:
 
                 package.close()
                 os.remove(self._trackPackage(package_name))
-                return True
+                return 1
 
             except Exception as e:
                 mas_utils.writelog(self.ERR.format(
@@ -335,14 +340,14 @@ init -45 python:
                 ))
                 if contents is not None:
                     contents.close()
-                return None
+                return 0
 
             finally:
                 # always close the package
                 if package is not None:
                     package.close()
 
-            return None
+            return 0
 
 
         def unpackPackage(self, package, pkg_slip=None):
@@ -877,15 +882,38 @@ init 200 python in mas_dockstat:
 
 ### Docking station labels regarding monika leaving the station
 
-# jump to this label when monika is ready to leave the station
+# call this label when monika is ready to leave the station
+# RETURNS:
+#   true if moni can leave
+#   false otherwise
 label mas_dockstat_ready_to_go:
-    m 1eua "Alright, I'm ready to go."
-    if persiste
-    if not renpy.seen_label("mas_dockstat_ready_to_go"):
+    show monika 2dsc
 
-    m 1eua "I'm ready to go."
-    # TODO: see you ?
-    return "quit"
+    # generate the monika file
+    $ moni_chksum = store.mas_dockstat.generateMonika(mas_docking_station)
+    $ can_moni_leave = moni_chksum is not None and moni_chksum != -1
+     
+     if can_moni_leave:
+        # file successfully made
+        # monika can leave
+        if len(persistent._mas_dockstat_checkout_log) == 0:
+            call mas_dockstat_first_time_goers
+
+        else:
+            m 1eua "Alright."
+
+        m 1eua "I'm ready to go."
+
+        $ persistent._mas_moni_chksum = moni_chksum
+
+    else:
+        # we failed to generate file somehow
+        m 1ekc "Oh no..."
+        m 1lksdlb "I wasn't able to turn myself into a file."
+        m "I think you'll have to go on without me this time."
+        m 1ekc "Sorry, [player]."
+
+    return can_moni_leave
 
 label mas_dockstat_first_time_goers:
     m 3eua "I'm now in the file 'monika' in your characters folder."
@@ -896,3 +924,52 @@ label mas_dockstat_first_time_goers:
     m 1ekc "Please be careful with me. It's so easy to delete files after all..."
     m 1eua "Anyway..."
     return
+
+# empty desk. This one includes file checking every 1 seconds for monika
+label mas_dockstat_empty_desk:
+    call spaceroom(hide_monika=True)
+    show emptydesk zorder MAS_MONIKA_Z at i11
+
+    python:
+        # setup ui hiding
+        import store.mas_dockstat as mas_dockstat
+        mas_OVLHide()
+        mas_calRaiseOverlayShield()
+        disable_esc()
+        mas_enable_quit()
+
+        # now just check for monika
+        moni_found = None
+        while moni_found is None:
+            moni_found = mas_docking_station.signForPackage(
+                "monika", 
+                persistent._mas_moni_chksum,
+                bs=mas_dockstat.blocksize
+            )
+
+            if moni_found == -1 or moni_found == 0:
+                # no monika found
+                moni_found = None
+
+                # wait a second
+                renpy.pause(1.0, hard=True)
+
+            # otherwise, we found monika, so leave moni_found not None so
+            # we can parse what to do next
+
+        if moni_found == -2:
+            # a monika is in here, but its not ours
+            # TODO: read in this monika and setup some temporary vars
+            # then we need to jump to an appropraite flow
+            pass
+
+        # otherwise, we found monika
+        # this means we have returned monika here. Let's go to her
+        # monika returned dialogue
+        # TODO: jump to that correct monika returned stuff
+    return
+
+
+
+
+
